@@ -1,0 +1,11 @@
+[package]
+name = "cornetroll"
+version = "0.2.0"
+authors = ["Mark Nokalt <marknokalt@live.com>"]
+edition = "2018"
+
+[dependencies]
+clap = "2.33"
+mpris = "1.1"
+signal-hook = "0.1"
+unix-named-pipe = "0.2"
