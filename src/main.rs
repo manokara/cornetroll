@@ -443,7 +443,11 @@ fn main() {
 
             Either::Right(config) => {
                 let term = Arc::new(AtomicBool::new(false));
+                #[cfg(debug_assertions)]
+                signal_hook::flag::register(signal_hook::SIGINT, Arc::clone(&term)).expect("Signal mayhem!");
+                #[cfg(not(debug_assertions))]
                 signal_hook::flag::register(signal_hook::SIGTERM, Arc::clone(&term)).expect("Signal mayhem!");
+
                 let mut status = PlayerStatus::new(config);
 
                 // Setup pipe
