@@ -12,6 +12,7 @@ const STOPPED_ICON: &'static str = "";
 const PREV_ICON: &'static str = "";
 const NEXT_ICON: &'static str = "";
 const CLOSED_MSG: &'static str = " no music playing";
+const EMPTY_CHAR: char = '\u{ffff}';
 
 const PIPE_PATH: &'static str = concat!("/tmp/cornetroll.", env!("USER"));
 const DEFAULT_DISPLAY_FORMAT: &'static str = "[prev] [play-pause] [next] [info] ┃ [metadata]";
@@ -371,6 +372,10 @@ impl Scroller {
         if buffer_len < self.size {
             self.buffer.extend(" ".repeat(self.size-buffer_len).chars());
         }
+
+        // Polybar strips the module's output, so scrollers at the end
+        // will not work properly.
+        self.buffer.push(EMPTY_CHAR);
     }
 
     pub fn display(&self) -> &str {
