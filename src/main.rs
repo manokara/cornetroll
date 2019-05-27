@@ -16,7 +16,7 @@ const EMPTY_CHAR: char = '\u{ffff}';
 
 const PIPE_PATH: &'static str = concat!("/tmp/cornetroll.", env!("USER"));
 const DEFAULT_DISPLAY_FORMAT: &'static str = "[prev] [play-pause] [next] [info] ┃ [metadata]";
-const DEFAULT_META_FORMAT: &'static str = "[artist] - [title]";
+const DEFAULT_META_FORMAT: &'static str = "<[artist] - >[title]";
 const DEFAULT_INFO_SETTINGS: (bool, bool) = (true, true);
 const DEFAULT_META_SETTINGS: (u8, u8) = (32, 10);
 const DEFAULT_TIME_SETTINGS: (bool, bool) = (true, false);
@@ -245,31 +245,152 @@ impl<'a> PlayerStatus<'a> {
     }
 
     fn update_meta(&mut self, meta: Metadata) {
-        let artists = match meta.artists() {
-            Some(m) => m.iter().map(|e| e.as_str()).collect(),
-            None => vec!["N/A"],
+        const EMPTY_TAG: &str = "N/A";
+
+        /// Tags are only Some if there's at least a non-empty string.
+        macro_rules! validate_tag {
+            ($tag:expr) => {
+                match $tag {
+                    Some(t) => if t.len() > 0 { Some(t) } else { None },
+                    n => n,
+                }
+            };
+
+            (list, $tag:expr) => {
+                match $tag {
+                    Some(list) => {
+                        if list.len() > 0 {
+                            if list[0].len() > 0 {
+                                Some(list.iter().map(|e| e.as_str()).collect())
+                            } else { None }
+                        } else { None }
+                    },
+                    None => None,
+                }
+            };
+        }
+
+        struct Tags<'a> {
+            artists: Option<Vec<&'a str>>,
+            album_name: Option<&'a str>,
+            album_artists: Option<Vec<&'a str>>,
+            title: Option<&'a str>,
+            track: Option<i32>,
+        }
+
+        let tags = &Tags {
+            artists: validate_tag!(list, meta.artists()),
+            album_name: validate_tag!(meta.album_name()),
+            album_artists: validate_tag!(list, meta.album_artists()),
+            title: validate_tag!(meta.title()),
+            track: meta.track_number(),
         };
-        let album_name = meta.album_name().unwrap_or("N/A");
-        let album_artists = match meta.album_artists() {
-            Some(m) => m.iter().map(|e| e.as_str()).collect(),
-            None => vec!["N/A"],
-        };
-        let title = meta.title().unwrap_or("N/A");
-        let track = meta.track_number().unwrap_or(-1);
+
         let mut content = String::new();
 
-        for block in &self.config.meta_format {
-            match block {
-                MetaFormat::Artist => content.push_str(&artists[0]),
-                MetaFormat::Artists => content.push_str(&artists.join(", ")),
-                MetaFormat::Album => content.push_str(album_name),
-                MetaFormat::AlbumArtist => content.push_str(&album_artists[0]),
-                MetaFormat::Title => content.push_str(title),
-                MetaFormat::Track => content.push_str(&format!("{}", track)),
-                MetaFormat::String(s) => content.push_str(&s),
-                MetaFormat::Optional(_) => (),
+        // Optionals render Strings before and after the first valid block
+        fn build_content(content: &mut String, tags: &Tags, blocks: &Vec<MetaFormat>, optional: bool) {
+            let mut flush_buffer = String::new();
+            let mut flush = false;
+
+            macro_rules! flushtag {
+                (buffer) => {
+                    if flush_buffer.len() > 0 && flush {
+                        content.extend(flush_buffer.chars());
+                        flush_buffer.clear();
+                    }
+                };
+
+                (flush) => {
+                    if !flush { flush = true; }
+                };
+
+                (unflush) => {
+                    if flush {
+                        flush = false;
+                        if flush_buffer.len() > 0 { flush_buffer.clear(); }
+                    }
+                };
+
+                ($tag:expr) => {
+                    if optional {
+                        if $tag.is_some() {
+                            flushtag!(flush);
+                            flushtag!(buffer);
+                            content.push_str($tag.unwrap());
+                        } else {
+                            flushtag!(unflush);
+                        }
+                    } else {
+                        content.push_str($tag.unwrap_or(EMPTY_TAG));
+                    }
+                };
+
+                (number, $tag:expr) => {
+                    if optional {
+                        if $tag.is_some() {
+                            flushtag!(flush);
+                            flushtag!(buffer);
+                            content.push_str(&format!("{}", $tag.unwrap()));
+                        } else {
+                            flushtag!(unflush);
+                        }
+                    } else {
+                        if let Some(n) = $tag {
+                            content.extend(format!("{}", n).chars());
+                        }
+                    }
+                };
+
+                (first, $tag:expr) => {
+                    if optional {
+                        if $tag.is_some() {
+                            flushtag!(flush);
+                            flushtag!(buffer);
+                            content.push_str($tag.clone().unwrap()[0]);
+                        } else {
+                            flushtag!(unflush);
+                        }
+                    } else {
+                        content.push_str(if let Some(list) = &$tag { list[0] } else { EMPTY_TAG });
+                    }
+                };
+
+                (join, $tag:expr) => {
+                    if optional {
+                        if $tag.is_some() {
+                            flushtag!(flush);
+                            flushtag!(buffer);
+                            content.extend($tag.clone().unwrap().join(", ").chars());
+                        } else {
+                            flushtag!(unflush);
+                        }
+                        if let Some(list) = &$tag {
+                            content.extend(list.join(", ").chars());
+                        } else {
+                            content.push_str(EMPTY_TAG);
+                        };
+                    }
+                };
             }
+
+            for block in blocks {
+                match block {
+                    MetaFormat::Artist => flushtag!(first, tags.artists),
+                    MetaFormat::Artists => flushtag!(join, tags.artists),
+                    MetaFormat::Album => flushtag!(tags.album_name),
+                    MetaFormat::AlbumArtist => flushtag!(first, tags.album_artists),
+                    MetaFormat::Title => flushtag!(tags.title),
+                    MetaFormat::Track => flushtag!(number, tags.track),
+                    MetaFormat::String(s) => if optional { flush_buffer.push_str(&s); } else { content.push_str(&s); },
+                    MetaFormat::Optional(o) => build_content(content, tags, &o, true),
+                }
+            }
+
+            flushtag!(buffer);
         }
+
+        build_content(&mut content, tags, &self.config.meta_format, false);
         let content = content.trim_end();
         self.meta_scroller.set_content(content);
         self.meta_scroller.update();
@@ -387,7 +508,7 @@ fn parse_cli() -> Result<Either<String, Config>, String> {
     use clap::{App, Arg};
 
     let matches = App::new("cornetroll")
-        .version("0.1")
+        .version(env!("CARGO_PKG_VERSION"))
         .author("manokara <marknokalt@live.com>")
         .about("MPRIS2 controller applet for polybar")
         .arg(Arg::with_name("command")
@@ -426,8 +547,20 @@ fn parse_cli() -> Result<Either<String, Config>, String> {
         };
         let meta_format = match process_meta_format(matches.value_of("metadata-format").unwrap()) {
             Ok(v) => v,
-            Err(e) => return Err(e),
+            Err(e) => return Err(format!("Metadata format - {}", e)),
         };
+
+        let mut metadata_test = false;
+        for fmt in &display_format {
+            if let DisplayFormat::Metadata(_, _) = fmt {
+                metadata_test = true;
+                break;
+            }
+        }
+
+        if !metadata_test {
+            return Err("Display format has no metadata block.".to_string());
+        }
 
         Ok(Either::Right(Config {
             display_format,
@@ -478,7 +611,9 @@ fn main() {
             }
         }
 
-        Err(e) => eprintln!("ERROR: {}", e),
+        Err(e) => {
+            eprintln!("ERROR: {}", e);
+            std::process::exit(1);
+        }
     }
 }
-

@@ -20,7 +20,7 @@ pub enum DisplayFormat {
     String(String),
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum MetaFormat {
     Artist,
     Artists,
@@ -45,26 +45,10 @@ impl fmt::Display for DisplayFormatError {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         use DisplayFormatError::*;
         match self {
-            Unexpected(pos, m) => write!(f, "at {}: {}", pos, m),
+            Unexpected(pos, m) => write!(f, "at {}: unexpected '{}'", pos, m),
             ArgumentCount(pos, block, expected, got) => write!(f, "at {}: expected {} arguments for block '{}', got {}", pos, expected, block, got),
             WrongArgumentType(pos) => write!(f, "at {}: wrong argument argument", pos),
             InvalidArgument(pos) => write!(f, "at {}: invalid argument", pos),
-            UnknownBlock(pos, name) => write!(f, "at {}: unknown block '{}'", pos, name),
-        }
-    }
-}
-
-#[derive(Debug)]
-pub enum MetaFormatError {
-    Unexpected(usize, char),
-    UnknownBlock(usize, String),
-}
-
-impl fmt::Display for MetaFormatError {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        use MetaFormatError::*;
-        match self {
-            Unexpected(pos, m) => write!(f, "at {}: {}", pos, m),
             UnknownBlock(pos, name) => write!(f, "at {}: unknown block '{}'", pos, name),
         }
     }
@@ -81,16 +65,24 @@ pub fn process_display_format(format: &str) -> Result<Vec<DisplayFormat>, Displa
 
     #[derive(PartialEq, Eq)]
     enum State {
+        Escape,
         Text,
-        BeginBlock,
+        Block,
         ArgumentList,
-        Argument(String),
     }
 
     enum Value {
         Number(u8),
         Bool(bool),
     }
+
+
+    let mut state = State::Text;
+    let mut buffer = String::new();
+    let mut context_pos = 0usize;
+    let mut current_block = String::new();
+    let mut result = Vec::<DisplayFormat>::new();
+    let mut args = Vec::<Option<Value>>::new();
 
     macro_rules! check_arg_count {
         ($pos:expr, $name:ident, $args:ident, $len:expr) => {
@@ -119,8 +111,8 @@ pub fn process_display_format(format: &str) -> Result<Vec<DisplayFormat>, Displa
     }
 
     macro_rules! extract_arg {
-        ($type:ident, $args:ident, $ind:expr, $default:expr) => {
-            match $args.get($ind) {
+        ($type:ident, $ind:expr, $default:expr) => {
+            match args.get($ind) {
                 Some(v1) => {
                     match v1 {
                         Some(v2) => match v2 {
@@ -138,16 +130,18 @@ pub fn process_display_format(format: &str) -> Result<Vec<DisplayFormat>, Displa
     }
 
     macro_rules! test_block_name {
-        ($pos:expr, $name:ident) => {
-            if !BLOCKS.contains(&$name.as_str()) { return Err(UnknownBlock($pos, $name.clone())); }
+        () => {
+            if !BLOCKS.contains(&current_block.as_str()) {
+                return Err(UnknownBlock(context_pos, current_block.clone()));
+            }
         };
     }
 
     macro_rules! flush_buffer {
-        ($buffer:expr, $vec:ident) => {
-            if $buffer.len() > 0 {
-                $vec.push(DisplayFormat::String($buffer.clone()));
-                $buffer.clear();
+        () => {
+            if buffer.len() > 0 {
+                result.push(DisplayFormat::String(buffer.clone()));
+                buffer.clear();
             }
         };
     }
@@ -188,26 +182,51 @@ pub fn process_display_format(format: &str) -> Result<Vec<DisplayFormat>, Displa
         Ok(())
     }
 
-    let mut state = State::Text;
-    let mut buffer = String::new();
-    let mut context_pos = 0usize;
-    let mut current_block = String::new();
-    let mut result = Vec::<DisplayFormat>::new();
-    let mut args = Vec::<Option<Value>>::new();
 
     for (pos, c) in format.chars().enumerate() {
+        macro_rules! escape_char {
+            () => {
+                buffer.push(c);
+                state = State::Text;
+            };
+        }
+
+        macro_rules! unexpected {
+            () => {
+                return Err(Unexpected(pos, c));
+            };
+        }
+
         match c {
-            '[' => {
-                if state == State::Text { flush_buffer!(buffer, result); }
-                else { return Err(DisplayFormatError::Unexpected(pos, c)); }
-                state = State::BeginBlock;
-                context_pos = pos+1;
+            // Escape special character
+            '\\' => {
+                if state == State::Text {
+                    state = State::Escape;
+                } else if state == State::Escape {
+                    escape_char!();
+                } else {
+                    unexpected!();
+                }
             }
 
+            // Open block
+            '[' => {
+                if state == State::Escape {
+                    escape_char!();
+                } else if state == State::Text {
+                    flush_buffer!();
+                    state = State::Block;
+                    context_pos = pos+1;
+                } else {
+                    unexpected!();
+                }
+            }
+
+            // Start block arguments
             ':' => {
-                if state == State::BeginBlock {
+                if state == State::Block {
                     current_block = buffer.trim().to_string();
-                    test_block_name!(context_pos, current_block);
+                    test_block_name!();
                     context_pos = pos+1;
                     state = State::ArgumentList;
                     buffer.clear();
@@ -216,6 +235,7 @@ pub fn process_display_format(format: &str) -> Result<Vec<DisplayFormat>, Displa
                 }
             }
 
+            // Go to the next argument
             ',' => {
                 if state == State::ArgumentList {
                     if buffer.len() > 0 {
@@ -223,6 +243,7 @@ pub fn process_display_format(format: &str) -> Result<Vec<DisplayFormat>, Displa
                     } else {
                         args.push(None);
                     }
+                    validate_arguments(context_pos, &current_block, &args)?;
                     buffer.clear();
                     context_pos = pos+1;
                 } else {
@@ -230,15 +251,18 @@ pub fn process_display_format(format: &str) -> Result<Vec<DisplayFormat>, Displa
                 }
             }
 
+            // Close block
             ']' => {
                 // Blocks without arguments
-                if state == State::BeginBlock {
-                    let name = buffer.trim().to_string();
+                if state == State::Escape {
+                    escape_char!();
+                } else if state == State::Block {
+                    current_block = buffer.trim().to_string();
+                    test_block_name!();
                     buffer.clear();
-                    test_block_name!(context_pos, name);
                     validate_arguments(context_pos, &current_block, &args)?;
 
-                    result.push(match name.as_str() {
+                    result.push(match current_block.as_str() {
                         "prev" => DisplayFormat::Prev,
                         "next" => DisplayFormat::Next,
                         "play-pause" => DisplayFormat::PlayPause,
@@ -258,30 +282,31 @@ pub fn process_display_format(format: &str) -> Result<Vec<DisplayFormat>, Displa
                         _ => unreachable!(),
                     });
 
+
                     state = State::Text;
 
-                // Blocks with arguments
+                    // Blocks with arguments
                 } else if state == State::ArgumentList {
                     if buffer.len() > 0 {
                         args.push(Some(parse_value(context_pos, buffer.trim())?));
-                        buffer.clear();
                     }
+                    buffer.clear();
                     validate_arguments(context_pos, &current_block, &args)?;
 
                     result.push(match current_block.as_str() {
                         "info" => DisplayFormat::PlayerInfo(
-                            extract_arg!(Bool, args, 0, DEFAULT_INFO_SETTINGS.0),
-                            extract_arg!(Bool, args, 1, DEFAULT_INFO_SETTINGS.1),
+                            extract_arg!(Bool, 0, DEFAULT_INFO_SETTINGS.0),
+                            extract_arg!(Bool, 1, DEFAULT_INFO_SETTINGS.1),
                         ),
 
                         "metadata" => DisplayFormat::Metadata(
-                            extract_arg!(Number, args, 0, DEFAULT_META_SETTINGS.0),
-                            extract_arg!(Number, args, 1, DEFAULT_META_SETTINGS.1),
+                            extract_arg!(Number, 0, DEFAULT_META_SETTINGS.0),
+                            extract_arg!(Number, 1, DEFAULT_META_SETTINGS.1),
                         ),
 
                         "time" => DisplayFormat::Time(
-                            extract_arg!(Bool, args, 0, DEFAULT_TIME_SETTINGS.0),
-                            extract_arg!(Bool, args, 1, DEFAULT_TIME_SETTINGS.1),
+                            extract_arg!(Bool, 0, DEFAULT_TIME_SETTINGS.0),
+                            extract_arg!(Bool, 1, DEFAULT_TIME_SETTINGS.1),
                         ),
 
                         _ => unreachable!(),
@@ -291,35 +316,181 @@ pub fn process_display_format(format: &str) -> Result<Vec<DisplayFormat>, Displa
 
                     state = State::Text;
                 } else {
-                    return Err(DisplayFormatError::Unexpected(pos, c));
+                    unexpected!();
                 }
             }
 
-            c => buffer.push(c),
+            _ => buffer.push(c),
         }
     }
 
-    flush_buffer!(buffer, result);
+    flush_buffer!();
     Ok(result)
 }
 
-pub fn process_meta_format(format: &str) -> Result<Vec<MetaFormat>, String> {
-    let mut result = Vec::new();
+#[derive(Debug)]
+pub enum MetaFormatError {
+    Unexpected(usize, char),
+    UnknownBlock(usize, String),
+    UnclosedOptional,
+}
 
-    for chunk in format.split_terminator(|c| c == '[' || c == ']') {
-        if chunk.len() > 0 {
-            result.push(match chunk {
-                "artist" => MetaFormat::Artist,
-                "artists" => MetaFormat::Artists,
-                "album" => MetaFormat::Album,
-                "album-artist" => MetaFormat::AlbumArtist,
-                "title" => MetaFormat::Title,
-                "track" => MetaFormat::Track,
-                s => MetaFormat::String(s.to_string()),
-            });
+impl fmt::Display for MetaFormatError {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        use MetaFormatError::*;
+        match self {
+            Unexpected(pos, m) => write!(f, "at {}: unexpected '{}'", pos, m),
+            UnknownBlock(pos, name) => write!(f, "at {}: unknown block '{}'", pos, name),
+            UnclosedOptional => write!(f, ": reached end-of-line with an unclosed optional tag"),
+        }
+    }
+}
+
+pub fn process_meta_format(format: &str) -> Result<Vec<MetaFormat>, MetaFormatError> {
+    use MetaFormatError::*;
+
+    const BLOCKS: &[&'static str] = &[
+        "artists", "artist", "album_artist",
+        "album", "title", "track",
+    ];
+
+    #[derive(PartialEq, Eq)]
+    enum State {
+        Escape,
+        Text,
+        Block,
+    }
+
+    let mut state_stack  = vec![State::Text];
+    let mut block_stack = vec![Vec::<MetaFormat>::new()];
+    let mut stack_index = 0;
+    let mut buffer = String::new();
+    let mut context_pos = 0;
+
+    macro_rules! test_block_name {
+        ($name:ident) => {
+            if !BLOCKS.contains(&$name.as_str()) { return Err(UnknownBlock(context_pos, $name.clone())); }
+        };
+    }
+
+    macro_rules! flush_buffer {
+        () => {
+            if buffer.len() > 0 {
+                block_stack[stack_index].push(MetaFormat::String(buffer.clone()));
+                buffer.clear();
+            };
+        };
+    }
+
+    for (pos, c) in format.chars().enumerate() {
+        macro_rules! escape_char {
+            () => {
+                buffer.push(c);
+                state_stack[stack_index] = State::Text;
+            };
+        }
+
+        macro_rules! unexpected {
+            () => {
+                return Err(Unexpected(pos, c));
+            };
+        }
+
+        match c {
+            // Escape special character
+            '\\' => {
+                if state_stack[stack_index] == State::Text {
+                    state_stack[stack_index] = State::Escape;
+                } else if state_stack[stack_index] == State::Escape {
+                    escape_char!();
+                } else {
+                    unexpected!();
+                }
+            }
+
+            // Open block
+            '[' => {
+                if state_stack[stack_index] == State::Text {
+                    flush_buffer!();
+                } else if state_stack[stack_index] == State::Escape {
+                    escape_char!();
+                } else {
+                    unexpected!();
+                }
+
+                context_pos = pos+1;
+                state_stack[stack_index] = State::Block;
+            }
+
+            // Close block
+            ']' => {
+                if state_stack[stack_index] == State::Block {
+                    let name = buffer.trim().to_string();
+                    buffer.clear();
+                    test_block_name!(name);
+
+                    block_stack[stack_index].push(match name.as_str() {
+                        "artists" => MetaFormat::Artists,
+                        "artist" => MetaFormat::Artist,
+                        "album" => MetaFormat::Album,
+                        "album_artist" => MetaFormat::AlbumArtist,
+                        "title" => MetaFormat::Title,
+                        "track" => MetaFormat::Track,
+                        _ => unreachable!(),
+                    });
+
+                    context_pos = pos+1;
+                    state_stack[stack_index] = State::Text;
+
+                } else if state_stack[stack_index] == State::Escape {
+                    escape_char!();
+                } else {
+                    unexpected!();
+                }
+            }
+
+            // Open optional chunks
+            '<' => {
+                if state_stack[stack_index] == State::Escape {
+                    escape_char!();
+                } else {
+                    flush_buffer!();
+                    context_pos = pos+1;
+                    state_stack.push(State::Text);
+                    block_stack.push(Vec::<MetaFormat>::new());
+                    stack_index += 1;
+                }
+            }
+
+            // Close optional chunks
+            '>' => {
+                if state_stack[stack_index] == State::Escape {
+                    escape_char!();
+                } else {
+                    if stack_index > 0 {
+                        flush_buffer!();
+                        context_pos = pos+1;
+                        state_stack.pop().unwrap();
+
+                        let blocks = block_stack.pop().unwrap();
+                        block_stack[stack_index-1].push(MetaFormat::Optional(blocks));
+                        stack_index -= 1;
+                    } else {
+                        unexpected!();
+                    }
+                }
+            }
+
+            _ => buffer.push(c),
         }
     }
 
+    if stack_index > 0 {
+        return Err(UnclosedOptional);
+    }
+
+    flush_buffer!();
+    let result = block_stack.pop().unwrap();
     Ok(result)
 }
 
@@ -339,5 +510,16 @@ fn test_display_format() {
     assert_eq!(process_display_format("[metadata:]").unwrap(), [Metadata(32, 10)]);
     assert_eq!(process_display_format("[metadata:,]").unwrap(), [Metadata(32, 10)]);
     assert_eq!(process_display_format("[metadata:,11]").unwrap(), [Metadata(32, 11)]);
-    assert_eq!(process_display_format("[metadata:,,]").is_err(), true);
+    assert_eq!(process_display_format("[metadata:,,]").is_err(), false);
+    assert_eq!(process_display_format("[metadata:,,11]").is_err(), true);
+}
+
+#[test]
+fn test_meta_format() {
+    use MetaFormat::*;
+    use super::DEFAULT_META_FORMAT;
+
+    assert_eq!(process_meta_format(DEFAULT_META_FORMAT).unwrap(), [
+        Optional(vec![Artist, String(" - ".to_string())]), Title,
+    ]);
 }
