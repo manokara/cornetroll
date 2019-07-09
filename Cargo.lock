@@ -84,9 +84,94 @@ name = "cornetroll"
 version = "0.3.0"
 dependencies = [
  "clap 2.33.0 (registry+https://github.com/rust-lang/crates.io-index)",
+ "crossterm 0.9.6 (registry+https://github.com/rust-lang/crates.io-index)",
  "mpris 1.1.2 (registry+https://github.com/rust-lang/crates.io-index)",
  "signal-hook 0.1.8 (registry+https://github.com/rust-lang/crates.io-index)",
  "unix-named-pipe 0.2.0 (registry+https://github.com/rust-lang/crates.io-index)",
+]
+
+[[package]]
+name = "crossterm"
+version = "0.9.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+dependencies = [
+ "crossterm_cursor 0.2.4 (registry+https://github.com/rust-lang/crates.io-index)",
+ "crossterm_input 0.3.6 (registry+https://github.com/rust-lang/crates.io-index)",
+ "crossterm_screen 0.2.3 (registry+https://github.com/rust-lang/crates.io-index)",
+ "crossterm_style 0.3.3 (registry+https://github.com/rust-lang/crates.io-index)",
+ "crossterm_terminal 0.2.4 (registry+https://github.com/rust-lang/crates.io-index)",
+ "crossterm_utils 0.2.3 (registry+https://github.com/rust-lang/crates.io-index)",
+]
+
+[[package]]
+name = "crossterm_cursor"
+version = "0.2.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+dependencies = [
+ "crossterm_utils 0.2.3 (registry+https://github.com/rust-lang/crates.io-index)",
+ "crossterm_winapi 0.1.4 (registry+https://github.com/rust-lang/crates.io-index)",
+ "winapi 0.3.7 (registry+https://github.com/rust-lang/crates.io-index)",
+]
+
+[[package]]
+name = "crossterm_input"
+version = "0.3.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+dependencies = [
+ "crossterm_screen 0.2.3 (registry+https://github.com/rust-lang/crates.io-index)",
+ "crossterm_utils 0.2.3 (registry+https://github.com/rust-lang/crates.io-index)",
+ "crossterm_winapi 0.1.4 (registry+https://github.com/rust-lang/crates.io-index)",
+ "libc 0.2.51 (registry+https://github.com/rust-lang/crates.io-index)",
+ "winapi 0.3.7 (registry+https://github.com/rust-lang/crates.io-index)",
+]
+
+[[package]]
+name = "crossterm_screen"
+version = "0.2.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+dependencies = [
+ "crossterm_utils 0.2.3 (registry+https://github.com/rust-lang/crates.io-index)",
+ "crossterm_winapi 0.1.4 (registry+https://github.com/rust-lang/crates.io-index)",
+ "winapi 0.3.7 (registry+https://github.com/rust-lang/crates.io-index)",
+]
+
+[[package]]
+name = "crossterm_style"
+version = "0.3.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+dependencies = [
+ "crossterm_utils 0.2.3 (registry+https://github.com/rust-lang/crates.io-index)",
+ "crossterm_winapi 0.1.4 (registry+https://github.com/rust-lang/crates.io-index)",
+ "winapi 0.3.7 (registry+https://github.com/rust-lang/crates.io-index)",
+]
+
+[[package]]
+name = "crossterm_terminal"
+version = "0.2.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+dependencies = [
+ "crossterm_cursor 0.2.4 (registry+https://github.com/rust-lang/crates.io-index)",
+ "crossterm_utils 0.2.3 (registry+https://github.com/rust-lang/crates.io-index)",
+ "crossterm_winapi 0.1.4 (registry+https://github.com/rust-lang/crates.io-index)",
+ "libc 0.2.51 (registry+https://github.com/rust-lang/crates.io-index)",
+]
+
+[[package]]
+name = "crossterm_utils"
+version = "0.2.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+dependencies = [
+ "crossterm_winapi 0.1.4 (registry+https://github.com/rust-lang/crates.io-index)",
+ "libc 0.2.51 (registry+https://github.com/rust-lang/crates.io-index)",
+ "winapi 0.3.7 (registry+https://github.com/rust-lang/crates.io-index)",
+]
+
+[[package]]
+name = "crossterm_winapi"
+version = "0.1.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+dependencies = [
+ "winapi 0.3.7 (registry+https://github.com/rust-lang/crates.io-index)",
 ]
 
 [[package]]
@@ -491,6 +576,14 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 "checksum cc 1.0.35 (registry+https://github.com/rust-lang/crates.io-index)" = "5e5f3fee5eeb60324c2781f1e41286bdee933850fff9b3c672587fed5ec58c83"
 "checksum cfg-if 0.1.7 (registry+https://github.com/rust-lang/crates.io-index)" = "11d43355396e872eefb45ce6342e4374ed7bc2b3a502d1b28e36d6e23c05d1f4"
 "checksum clap 2.33.0 (registry+https://github.com/rust-lang/crates.io-index)" = "5067f5bb2d80ef5d68b4c87db81601f0b75bca627bc2ef76b141d7b846a3c6d9"
+"checksum crossterm 0.9.6 (registry+https://github.com/rust-lang/crates.io-index)" = "21ac79357981b3c35917a377e6138729b66316db7649f9f96fbb517bb02361e5"
+"checksum crossterm_cursor 0.2.4 (registry+https://github.com/rust-lang/crates.io-index)" = "4b8ddb43937bfafbe07d349ee9497754ceac818ee872116afccb076f2de28d3d"
+"checksum crossterm_input 0.3.6 (registry+https://github.com/rust-lang/crates.io-index)" = "a23a71b51ddc8f74e13e341179b1a26b20f0030d14ff8fbdd9da45fd0e342bc5"
+"checksum crossterm_screen 0.2.3 (registry+https://github.com/rust-lang/crates.io-index)" = "90889b9f1d7867a583dede34deab1e32a10379e9eb70d920ca7895e144aa6d65"
+"checksum crossterm_style 0.3.3 (registry+https://github.com/rust-lang/crates.io-index)" = "983596405fe738aac9645656b666073fe6e0a8bf088679b7e256916ee41b61f7"
+"checksum crossterm_terminal 0.2.4 (registry+https://github.com/rust-lang/crates.io-index)" = "18792c97c5cdcc5fd3582df58188a793bf290af4a53d5fc8442c7d17e003b356"
+"checksum crossterm_utils 0.2.3 (registry+https://github.com/rust-lang/crates.io-index)" = "8321d40908d0ee77cb29335f591eae2b4f7225152f81b9dfa35a161ca3b077dc"
+"checksum crossterm_winapi 0.1.4 (registry+https://github.com/rust-lang/crates.io-index)" = "8c061e4a1c47a53952ba0f2396c00a61cd7ab74482eba99b9c9cc77fdca71932"
 "checksum darling 0.4.0 (registry+https://github.com/rust-lang/crates.io-index)" = "2a78af487e4eb8f4421a1770687b328af6bb4494ca93435210678c6eea875c11"
 "checksum darling_core 0.4.0 (registry+https://github.com/rust-lang/crates.io-index)" = "b315f49c7b6db3708bca6e6913c194581a44ec619b7a39e131d4dd63733a3698"
 "checksum darling_macro 0.4.0 (registry+https://github.com/rust-lang/crates.io-index)" = "eb69a38fdeaeaf3db712e1df170de67ee9dfc24fb88ca3e9d21e703ec25a4d8e"

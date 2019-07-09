@@ -6,23 +6,39 @@ use formatting::*;
 
 mod formatting;
 
+const DEBUG_BUILD: bool = cfg!(debug_assertions);
 const PLAY_ICON: &'static str = "";
 const PAUSE_ICON: &'static str = "";
 const STOPPED_ICON: &'static str = "";
 const PREV_ICON: &'static str = "";
 const NEXT_ICON: &'static str = "";
 const CLOSED_MSG: &'static str = " no music playing";
-const EMPTY_CHAR: char = '\u{ffff}';
-
+#[cfg(not(debug_assertions))] const EMPTY_CHAR: char = '\u{ffff}';
 const PIPE_PATH: &'static str = concat!("/tmp/cornetroll.", env!("USER"));
+
+#[cfg(debug_assertions)]
+const DEFAULT_DISPLAY_FORMAT: &'static str = "[status] [info] ┃ [metadata]";
+#[cfg(not(debug_assertions))]
 const DEFAULT_DISPLAY_FORMAT: &'static str = "[prev] [play-pause] [next] [info] ┃ [metadata]";
+
 const DEFAULT_META_FORMAT: &'static str = "<[artist] - >[title]";
 const DEFAULT_INFO_SETTINGS: (bool, bool) = (true, true);
 const DEFAULT_META_SETTINGS: (u8, u8) = (32, 10);
 const DEFAULT_TIME_SETTINGS: (bool, bool) = (true, false);
+
+const COMMAND_PLAY: &'static str = "play";
+const COMMAND_PAUSE: &'static str = "pause";
+const COMMAND_STOP: &'static str = "stop";
+const COMMAND_PREV: &'static str = "prev";
+const COMMAND_NEXT: &'static str = "next";
+const COMMAND_PREV_PLAYER: &'static str = "prev-player";
+const COMMAND_NEXT_PLAYER: &'static str = "next-player";
+const COMMAND_PLAY_PAUSE: &'static str = "play-pause";
+
 const COMMANDS: &[&'static str] = &[
-    "play", "pause", "prev", "next",
-    "prev-player", "next-player",
+    COMMAND_PLAY, COMMAND_PAUSE, COMMAND_STOP, COMMAND_PREV,
+    COMMAND_NEXT, COMMAND_PREV_PLAYER, COMMAND_NEXT_PLAYER,
+    COMMAND_PLAY_PAUSE,
 ];
 
 // If Strings and strs are guaranteed to hold a valid UTF-8 character, why the f*** does .len()
@@ -400,17 +416,26 @@ impl<'a> PlayerStatus<'a> {
         if self.players.len() == 0 { return Ok(()); }
 
         match command {
-            "play" => self.current_player().play()?,
-            "pause" => self.current_player().pause()?,
-            "stop" => self.current_player().stop()?,
-            "prev" => self.current_player().previous()?,
-            "next" => self.current_player().next()?,
-            "next-player" => {
+            COMMAND_PLAY => self.current_player().play()?,
+            COMMAND_PAUSE => self.current_player().pause()?,
+            COMMAND_STOP => self.current_player().stop()?,
+            COMMAND_PREV => self.current_player().previous()?,
+            COMMAND_NEXT => self.current_player().next()?,
+            COMMAND_PLAY_PAUSE => {
+                use PlaybackStatus::*;
+
+                let status = self.current_player().get_playback_status()?;
+                match status {
+                    Playing => self.current_player().pause()?,
+                    Paused | Stopped => self.current_player().play()?,
+                }
+            }
+            COMMAND_NEXT_PLAYER => {
                 if self.current_idx < self.players.len()-1 {
                     self.current_idx += 1;
                 }
             },
-            "prev-player" => {
+            COMMAND_PREV_PLAYER => {
                 if self.current_idx > 0 {
                     self.current_idx -= 1;
                 }
@@ -422,7 +447,11 @@ impl<'a> PlayerStatus<'a> {
     }
 
     fn action(&self, command: &str, icon: &str) -> String {
-        format!("%{{A1:{} {}:}}{}%{{A}}", self.bin_path.display(), command, icon)
+        if DEBUG_BUILD {
+            icon.to_string()
+        } else {
+            format!("%{{A1:{} {}:}}{}%{{A}}", self.bin_path.display(), command, icon)
+        }
     }
 
     fn print_flush<S: AsRef<str>>(&mut self, string: S) {
@@ -496,6 +525,7 @@ impl Scroller {
 
         // Polybar strips the module's output, so scrollers at the end
         // will not work properly.
+        #[cfg(not(debug_assertions))]
         self.buffer.push(EMPTY_CHAR);
     }
 
@@ -571,45 +601,107 @@ fn parse_cli() -> Result<Either<String, Config>, String> {
     }
 }
 
-fn main() {
-    match parse_cli() {
-        Ok(e) => match e {
-            Either::Left(command) => {
-                let mut pipe = unix_named_pipe::open_write(PIPE_PATH).expect("Unable to write to named ppipe");
-                pipe.write_all(command.as_bytes()).unwrap();
+fn send_command(command: String) -> Result<(), String> {
+    let mut pipe = unix_named_pipe::open_write(PIPE_PATH).map_err(|_| "Unable to write to named pipe")?;
+    pipe.write_all(command.as_bytes()).map_err(|_| "Couldn't write to pipe")?;
+    Ok(())
+}
+
+fn run_controller(config: Config) -> Result<(), String> {
+    use std::fs::File;
+    #[cfg(debug_assertions)] use crossterm::{Crossterm, RawScreen, AsyncReader};
+
+    let term = Arc::new(AtomicBool::new(false));
+    signal_hook::flag::register(signal_hook::SIGTERM, Arc::clone(&term)).map_err(|_| "Couldn't hook SIGTERM.")?;
+
+    #[cfg(debug_assertions)]
+    let (_cross, cross_input, _cross_screen) = {
+        let cross = Crossterm::new();
+        let input = cross.input();
+        let screen = RawScreen::into_raw_mode().map_err(|_| "Couldn't put screen in raw mode")?;
+        (cross, input, screen)
+    };
+
+    let mut status = PlayerStatus::new(config);
+    let mut command_buffer = String::new();
+    let mut command_pipe = if DEBUG_BUILD {
+        println!("[SPC] = play/pause [S] = Stop [H] Previous song [L] = Next song\r");
+        println!("[J] = Previous player [K] = Next player [Q] = Quit\r\n");
+
+        cross_input.disable_mouse_mode().unwrap_or(());
+        Either::Left(cross_input.read_async())
+    } else {
+        match fs::remove_file(PIPE_PATH) {
+            Ok(_) => (),
+            Err(_) => (),
+        }
+
+        unix_named_pipe::create(PIPE_PATH, Some(0o600)).map_err(|_| "Couldn't create named pipe")?;
+        Either::Right(unix_named_pipe::open_read(PIPE_PATH).map_err(|_| "Unable to open named pipe")?)
+    };
+
+    fn get_command<'a>(pipe: &mut Either<AsyncReader, File>, buffer: &'a mut String) -> Result<Option<&'a str>, String> {
+        buffer.clear();
+
+        match pipe {
+            Either::Left(reader) => {
+                use crossterm::{InputEvent::Keyboard, KeyEvent::*};
+
+                if let Some(ev) = reader.next() {
+                    if let Keyboard(key) = ev {
+                        match key {
+                            Char(' ') => return Ok(Some(COMMAND_PLAY_PAUSE)),
+                            Char('H') | Char('h') => return Ok(Some(COMMAND_PREV)),
+                            Char('L') | Char('l') => return Ok(Some(COMMAND_NEXT)),
+                            Char('S') | Char('s') => return Ok(Some(COMMAND_STOP)),
+                            Char('J') | Char('j') => return Ok(Some(COMMAND_PREV_PLAYER)),
+                            Char('K') | Char('k') => return Ok(Some(COMMAND_NEXT_PLAYER)),
+                            Char('Q') | Char('q') | Ctrl('c') => return Ok(Some("quit")),
+                            _ => (),
+                        }
+                    }
+                }
             }
 
-            Either::Right(config) => {
-                let term = Arc::new(AtomicBool::new(false));
-                #[cfg(debug_assertions)]
-                signal_hook::flag::register(signal_hook::SIGINT, Arc::clone(&term)).expect("Signal mayhem!");
-                #[cfg(not(debug_assertions))]
-                signal_hook::flag::register(signal_hook::SIGTERM, Arc::clone(&term)).expect("Signal mayhem!");
-
-                let mut status = PlayerStatus::new(config);
-
-                // Setup pipe
-                match fs::remove_file(PIPE_PATH) {
-                    Ok(_) => (),
-                    Err(_) => (),
+            Either::Right(pipe) => {
+                pipe.read_to_string(buffer).map_err(|_| "Unable to read named pipe")?;
+                if buffer.len() > 0 && COMMANDS.contains(&buffer.as_str()) {
+                    return Ok(Some(buffer.as_str()));
                 }
-                unix_named_pipe::create(PIPE_PATH, Some(0o600)).expect("Couldn't create named pipe");
-                let mut pipe = unix_named_pipe::open_read(PIPE_PATH).expect("Unable to open named pipe");
-                let mut pipe_buffer = String::new();
-
-                while !term.load(Ordering::Relaxed) {
-                    pipe.read_to_string(&mut pipe_buffer).expect("Unable to read named pipe");
-                    if pipe_buffer.len() > 0 {
-                        if let Ok(_) = status.command(&pipe_buffer) {};
-                    }
-                    pipe_buffer.clear();
-                    status.update();
-                    thread::sleep(Duration::from_millis(300));
-                }
-
-                fs::remove_file(PIPE_PATH).unwrap();
             }
         }
+
+        Ok(None)
+    }
+
+    while !term.load(Ordering::Relaxed) {
+        if let Some(cmd) = get_command(&mut command_pipe, &mut command_buffer)? {
+            #[cfg(debug_assertions)] {
+                if cmd == "quit" { break; }
+            }
+
+            match status.command(cmd) {
+                Ok(_) => (),
+                Err(e) => eprintln!("Command error: {}", e),
+            }
+        }
+
+        status.update();
+        thread::sleep(Duration::from_millis(300));
+    }
+
+    #[cfg(not(debug_assertions))]
+    fs::remove_file(PIPE_PATH).unwrap();
+
+    Ok(())
+}
+
+fn main() {
+    match parse_cli().and_then(|r| match r {
+        Either::Left(command) => send_command(command),
+        Either::Right(config) => run_controller(config),
+    }) {
+        Ok(_) => (),
 
         Err(e) => {
             eprintln!("ERROR: {}", e);
