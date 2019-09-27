@@ -1,4 +1,4 @@
-use std::{env, thread, time::Duration, path::PathBuf, fs};
+use std::{env, thread, time::Duration, path::PathBuf};
 use std::io::{Read, Write, stdout};
 use std::sync::{Arc, atomic::{AtomicBool, Ordering}};
 use mpris::{DBusError, Player, PlayerFinder, PlaybackStatus, Metadata};
@@ -487,7 +487,15 @@ impl Scroller {
     }
 
     pub fn set_content(&mut self, content: &str) {
-        self.content = content.to_string();
+        if self.content != content {
+            self.content = content.to_string();
+            self.reset_head();
+        }
+    }
+
+    fn reset_head(&mut self) {
+        self.head = 0;
+        self.forward = true;
     }
 
     pub fn update(&mut self) {
@@ -609,13 +617,15 @@ fn send_command(command: String) -> Result<(), String> {
 
 fn run_controller(config: Config) -> Result<(), String> {
     use std::fs::File;
-    #[cfg(debug_assertions)] use crossterm::{Crossterm, RawScreen, AsyncReader};
+    use crossterm::AsyncReader;
 
     let term = Arc::new(AtomicBool::new(false));
     signal_hook::flag::register(signal_hook::SIGTERM, Arc::clone(&term)).map_err(|_| "Couldn't hook SIGTERM.")?;
 
     #[cfg(debug_assertions)]
     let (_cross, cross_input, _cross_screen) = {
+        use crossterm::{Crossterm, RawScreen};
+
         let cross = Crossterm::new();
         let input = cross.input();
         let screen = RawScreen::into_raw_mode().map_err(|_| "Couldn't put screen in raw mode")?;
@@ -624,14 +634,19 @@ fn run_controller(config: Config) -> Result<(), String> {
 
     let mut status = PlayerStatus::new(config);
     let mut command_buffer = String::new();
-    let mut command_pipe = if DEBUG_BUILD {
+
+    #[cfg(debug_assertions)]
+    let mut command_pipe = {
         println!("[SPC] = play/pause [S] = Stop [H] Previous song [L] = Next song\r");
         println!("[J] = Previous player [K] = Next player [Q] = Quit\r\n");
 
         cross_input.disable_mouse_mode().unwrap_or(());
         Either::Left(cross_input.read_async())
-    } else {
-        match fs::remove_file(PIPE_PATH) {
+    };
+
+    #[cfg(not(debug_assertions))]
+    let mut command_pipe = {
+        match std::fs::remove_file(PIPE_PATH) {
             Ok(_) => (),
             Err(_) => (),
         }
@@ -691,7 +706,7 @@ fn run_controller(config: Config) -> Result<(), String> {
     }
 
     #[cfg(not(debug_assertions))]
-    fs::remove_file(PIPE_PATH).unwrap();
+    std::fs::remove_file(PIPE_PATH).unwrap();
 
     Ok(())
 }
