@@ -13,7 +13,7 @@ const STOPPED_ICON: &'static str = "";
 const PREV_ICON: &'static str = "";
 const NEXT_ICON: &'static str = "";
 const CLOSED_MSG: &'static str = " no music playing";
-#[cfg(not(debug_assertions))] const EMPTY_CHAR: char = '\u{ffff}';
+#[cfg(not(debug_assertions))] const EMPTY_CHAR: char = '\u{feff}';
 const PIPE_PATH: &'static str = concat!("/tmp/cornetroll.", env!("USER"));
 
 #[cfg(debug_assertions)]
@@ -67,6 +67,7 @@ struct Config {
     display_format: Vec<DisplayFormat>,
     meta_format: Vec<MetaFormat>,
     refresh_wait: u8,
+    compat: bool,
 }
 
 struct PlayerStatus<'a> {
@@ -87,7 +88,6 @@ impl<'a> PlayerStatus<'a> {
     pub fn new(config: Config) -> Self {
         let mut me = Self {
             bin_path: env::current_exe().unwrap(),
-            config,
             finder: PlayerFinder::new().unwrap(),
             players: Vec::new(),
             display_buffer: String::new(),
@@ -97,6 +97,7 @@ impl<'a> PlayerStatus<'a> {
             refresh_wait: 0,
             last_display: String::new(),
             _player_id: 0,
+            config,
         };
         me.init_scrollers();
         me
@@ -447,7 +448,7 @@ impl<'a> PlayerStatus<'a> {
     }
 
     fn action(&self, command: &str, icon: &str) -> String {
-        if DEBUG_BUILD {
+        if DEBUG_BUILD || self.config.compat {
             icon.to_string()
         } else {
             format!("%{{A1:{} {}:}}{}%{{A}}", self.bin_path.display(), command, icon)
@@ -574,6 +575,11 @@ fn parse_cli() -> Result<Either<String, Config>, String> {
              .takes_value(true)
              .default_value("10")
         )
+        .arg(Arg::with_name("compat")
+             .help("Disable action markup for non-polybar compatibility")
+             .short("c")
+             .long("compat")
+        )
     .get_matches();
 
     if let Some(command) = matches.value_of("command") {
@@ -605,6 +611,7 @@ fn parse_cli() -> Result<Either<String, Config>, String> {
             meta_format,
             refresh_wait: matches.value_of("refresh-ticks").unwrap().parse::<u8>()
                         .map_err(|_| "refresh-ticks must be between 0 and 255 inclusive.")?,
+            compat: matches.is_present("compat"),
         }))
     }
 }
@@ -724,3 +731,4 @@ fn main() {
         }
     }
 }
+
