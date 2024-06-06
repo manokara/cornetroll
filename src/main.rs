@@ -67,7 +67,14 @@ struct Config {
     display_format: Vec<DisplayFormat>,
     meta_format: Vec<MetaFormat>,
     refresh_wait: u8,
-    compat: bool,
+    markup_type: MarkupType,
+}
+
+#[derive(Copy, Clone, Eq, PartialEq)]
+enum MarkupType {
+    Polybar,
+    Yuck,
+    Plain,
 }
 
 struct PlayerStatus<'a> {
@@ -166,6 +173,10 @@ impl<'a> PlayerStatus<'a> {
 
             self.display_buffer.clear();
 
+            if self.config.markup_type == MarkupType::Yuck {
+                self.display_buffer.push_str("(box :class \"cornetroll\" :space-evenly false :vexpand true");
+            }
+
             for block in self.config.display_format.iter() {
                 let result = match block {
                     DisplayFormat::Prev => self.action("prev", PREV_ICON),
@@ -174,25 +185,28 @@ impl<'a> PlayerStatus<'a> {
                         _ => self.action("play", PLAY_ICON),
                     },
                     DisplayFormat::Next => self.action("next", NEXT_ICON),
-                    DisplayFormat::Status => match status {
+                    DisplayFormat::Status => self.text(match status {
                         PlaybackStatus::Playing => PLAY_ICON.to_string(),
                         PlaybackStatus::Paused => PAUSE_ICON.to_string(),
                         PlaybackStatus::Stopped => STOPPED_ICON.to_string(),
-                    },
+                    }),
                     DisplayFormat::PlayerInfo(show_total, show_name) => {
                         let mut info = String::new();
                         info.push_str(&format!("{}", self.current_idx+1));
+
                         if *show_total {
                             info.push_str(&format!("/{}", self.players.len()));
                         }
+
                         if *show_name {
                             info.push_str(": ");
                             info.push_str(self.info_scroller.display());
                         }
-                        info
+
+                        self.text(info)
                     },
                     DisplayFormat::Metadata(_, _) => {
-                        self.meta_scroller.display().to_string()
+                        self.text(self.meta_scroller.display().to_string())
                     },
                     DisplayFormat::Time(show_length, use_remaining) => {
                         let mut time = String::new();
@@ -248,11 +262,16 @@ impl<'a> PlayerStatus<'a> {
                             }
                         }
 
-                        time
+                        self.text(time)
                     },
-                    DisplayFormat::String(s) => s.clone(),
+                    DisplayFormat::String(s) => self.text(s),
                 };
+
                 self.display_buffer.push_str(&result);
+            }
+
+            if self.config.markup_type == MarkupType::Yuck {
+                self.display_buffer.push(')');
             }
 
             self.print_flush(self.display_buffer.clone().trim_end());
@@ -448,10 +467,38 @@ impl<'a> PlayerStatus<'a> {
     }
 
     fn action(&self, command: &str, icon: &str) -> String {
-        if DEBUG_BUILD || self.config.compat {
-            icon.to_string()
+        let markup_type = if DEBUG_BUILD {
+            MarkupType::Plain
         } else {
-            format!("%{{A1:{} {}:}}{}%{{A}}", self.bin_path.display(), command, icon)
+            self.config.markup_type
+        };
+
+        match markup_type {
+            MarkupType::Polybar => format!("%{{A1:{} {}:}}{}%{{A}}", self.bin_path.display(), command, icon),
+            MarkupType::Yuck => format!(
+                "(button :onclick `{} {}` `{}`)",
+                self.bin_path.display(), command, icon
+            ),
+            MarkupType::Plain => icon.to_string(),
+        }
+    }
+
+    fn text<T: std::fmt::Display>(&self, content: T) -> String {
+        let markup_type = if DEBUG_BUILD {
+            MarkupType::Plain
+        } else {
+            self.config.markup_type
+        };
+
+        let content_string = content.to_string();
+
+        match markup_type {
+            MarkupType::Yuck => if content_string.trim().len() > 0 {
+                format!("(label :text `{}` :show-truncated false :unindent false)", content_string)
+            } else {
+                String::new()
+            },
+            _ => content_string,
         }
     }
 
@@ -543,13 +590,24 @@ impl Scroller {
     }
 }
 
+impl<'a> From<&'a str> for MarkupType {
+    fn from(name: &'a str) -> Self {
+        match name {
+            "polybar" => Self::Polybar,
+            "yuck" => Self::Yuck,
+            "plain" => Self::Plain,
+            _ => unreachable!(), // possible values are validated by clap
+        }
+    }
+}
+
 fn parse_cli() -> Result<Either<String, Config>, String> {
     use clap::{App, Arg};
 
     let matches = App::new("cornetroll")
         .version(env!("CARGO_PKG_VERSION"))
         .author("manokara <marknokalt@live.com>")
-        .about("MPRIS2 controller applet for polybar")
+        .about("MPRIS2 controller applet for your custom desktop system bar")
         .arg(Arg::with_name("command")
              .help("Which command to send to the current running instance")
              .possible_values(COMMANDS)
@@ -575,10 +633,13 @@ fn parse_cli() -> Result<Either<String, Config>, String> {
              .takes_value(true)
              .default_value("10")
         )
-        .arg(Arg::with_name("compat")
-             .help("Disable action markup for non-polybar compatibility")
-             .short("c")
-             .long("compat")
+        .arg(Arg::with_name("markup-type")
+             .help("What kind of markup should cornetroll output, if any.")
+             .short("t")
+             .long("markup-type")
+             .takes_value(true)
+             .default_value("polybar")
+             .possible_values(&["polybar", "yuck", "none"])
         )
     .get_matches();
 
@@ -611,7 +672,7 @@ fn parse_cli() -> Result<Either<String, Config>, String> {
             meta_format,
             refresh_wait: matches.value_of("refresh-ticks").unwrap().parse::<u8>()
                         .map_err(|_| "refresh-ticks must be between 0 and 255 inclusive.")?,
-            compat: matches.is_present("compat"),
+            markup_type: matches.value_of("markup-type").unwrap().into(),
         }))
     }
 }
@@ -731,4 +792,3 @@ fn main() {
         }
     }
 }
-
