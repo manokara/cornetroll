@@ -77,11 +77,11 @@ enum MarkupType {
     Plain,
 }
 
-struct PlayerStatus<'a> {
+struct PlayerStatus {
     bin_path: PathBuf,
     config: Config,
     finder: PlayerFinder,
-    players: Vec<Player<'a>>,
+    players: Vec<Player>,
     display_buffer: String,
     info_scroller: Scroller,
     meta_scroller: Scroller,
@@ -91,7 +91,7 @@ struct PlayerStatus<'a> {
     _player_id: usize,
 }
 
-impl<'a> PlayerStatus<'a> {
+impl PlayerStatus {
     pub fn new(config: Config) -> Self {
         let mut me = Self {
             bin_path: env::current_exe().unwrap(),
@@ -155,7 +155,7 @@ impl<'a> PlayerStatus<'a> {
         self.display();
     }
 
-    fn current_player(&self) -> &Player<'a> {
+    fn current_player(&self) -> &Player {
         &self.players[self.current_idx]
     }
 
@@ -229,7 +229,7 @@ impl<'a> PlayerStatus<'a> {
                             if let Ok(v) = position {
                                 time.push_str(&format_time(v));
                             } else {
-                                time.push_str(" N/A ");
+                                time.push_str("N/A");
                             }
                             time.push_str("/");
 
@@ -237,13 +237,13 @@ impl<'a> PlayerStatus<'a> {
                                 if let Some(v) = remaining {
                                     time.push_str(&format_time(v));
                                 } else {
-                                    time.push_str(" N/A ");
+                                    time.push_str("N/A");
                                 }
                             } else {
                                 if let Some(v) = length {
                                     time.push_str(&format_time(v));
                                 } else {
-                                    time.push_str(" N/A ");
+                                    time.push_str("N/A");
                                 }
                             }
                         } else {
@@ -251,13 +251,13 @@ impl<'a> PlayerStatus<'a> {
                                 if let Some(v) = remaining {
                                     time.push_str(&format_time(v));
                                 } else {
-                                    time.push_str(" N/A ");
+                                    time.push_str("N/A");
                                 }
                             } else {
                                 if let Ok(v) = position {
                                     time.push_str(&format_time(v));
                                 } else {
-                                    time.push_str(" N/A ");
+                                    time.push_str("N/A");
                                 }
                             }
                         }
@@ -297,7 +297,7 @@ impl<'a> PlayerStatus<'a> {
                     Some(list) => {
                         if list.len() > 0 {
                             if list[0].len() > 0 {
-                                Some(list.iter().map(|e| e.as_str()).collect())
+                                Some(list.iter().map(|e| *e).collect())
                             } else { None }
                         } else { None }
                     },
@@ -602,55 +602,65 @@ impl<'a> From<&'a str> for MarkupType {
 }
 
 fn parse_cli() -> Result<Either<String, Config>, String> {
-    use clap::{App, Arg};
+    use clap::{
+        builder::PossibleValuesParser,
+        Arg, Command,
+        value_parser,
+    };
 
-    let matches = App::new("cornetroll")
+    let matches = Command::new("cornetroll")
         .version(env!("CARGO_PKG_VERSION"))
         .author("manokara <marknokalt@live.com>")
         .about("MPRIS2 controller applet for your custom desktop system bar")
-        .arg(Arg::with_name("command")
+        .arg(Arg::new("command")
              .help("Which command to send to the current running instance")
-             .possible_values(COMMANDS)
+             .value_parser(PossibleValuesParser::new(COMMANDS))
         )
-        .arg(Arg::with_name("display-format")
+        .arg(Arg::new("display-format")
              .help("How the player presents itself")
-             .short("f")
+             .short('f')
              .long("display-format")
-             .takes_value(true)
              .default_value(DEFAULT_DISPLAY_FORMAT)
         )
-        .arg(Arg::with_name("metadata-format")
+        .arg(Arg::new("metadata-format")
              .help("What information about the song will be shown")
-             .short("m")
+             .short('m')
              .long("metadata-format")
-             .takes_value(true)
              .default_value(DEFAULT_META_FORMAT)
         )
-        .arg(Arg::with_name("refresh-ticks")
+        .arg(Arg::new("refresh-ticks")
              .help("How many ticks to wait to refresh the player cache.")
-             .short("r")
+             .short('r')
              .long("refresh-ticks")
-             .takes_value(true)
              .default_value("10")
+             .value_parser(value_parser!(u8))
         )
-        .arg(Arg::with_name("markup-type")
+        .arg(Arg::new("markup-type")
              .help("What kind of markup should cornetroll output, if any.")
-             .short("t")
+             .short('t')
              .long("markup-type")
-             .takes_value(true)
              .default_value("polybar")
-             .possible_values(&["polybar", "yuck", "none"])
+             .value_parser(PossibleValuesParser::new(["polybar", "yuck", "none"]))
         )
     .get_matches();
 
-    if let Some(command) = matches.value_of("command") {
-        Ok(Either::Left(command.to_string()))
+    if let Some(command) = matches.get_one::<String>("command") {
+        Ok(Either::Left(command.to_owned()))
     } else {
-        let display_format = match process_display_format(matches.value_of("display-format").unwrap()) {
+        let display_format = matches
+            .get_one::<String>("display-format")
+            .expect("has default value");
+
+        let meta_format = matches
+            .get_one::<String>("metadata-format")
+            .expect("has default value");
+
+        let display_format = match process_display_format(display_format) {
             Ok(v) => v,
             Err(e) => return Err(format!("Display format - {}", e)),
         };
-        let meta_format = match process_meta_format(matches.value_of("metadata-format").unwrap()) {
+
+        let meta_format = match process_meta_format(meta_format) {
             Ok(v) => v,
             Err(e) => return Err(format!("Metadata format - {}", e)),
         };
@@ -670,9 +680,14 @@ fn parse_cli() -> Result<Either<String, Config>, String> {
         Ok(Either::Right(Config {
             display_format,
             meta_format,
-            refresh_wait: matches.value_of("refresh-ticks").unwrap().parse::<u8>()
-                        .map_err(|_| "refresh-ticks must be between 0 and 255 inclusive.")?,
-            markup_type: matches.value_of("markup-type").unwrap().into(),
+            refresh_wait: *matches
+                .get_one::<u8>("refresh-ticks")
+                .expect("has_default value"),
+            markup_type: matches
+                .get_one::<String>("markup-type")
+                .expect("has default-value")
+                .as_str()
+                .into(),
         }))
     }
 }
@@ -685,20 +700,23 @@ fn send_command(command: String) -> Result<(), String> {
 
 fn run_controller(config: Config) -> Result<(), String> {
     use std::fs::File;
-    use crossterm::AsyncReader;
+    use crossterm::{
+        event::{
+            DisableMouseCapture,
+            read, poll,
+        },
+        execute,
+    };
 
     let term = Arc::new(AtomicBool::new(false));
-    signal_hook::flag::register(signal_hook::SIGTERM, Arc::clone(&term)).map_err(|_| "Couldn't hook SIGTERM.")?;
+    signal_hook::flag::register(
+        signal_hook::consts::SIGTERM,
+        Arc::clone(&term)
+    ).map_err(|_| "Couldn't hook SIGTERM.")?;
 
     #[cfg(debug_assertions)]
-    let (_cross, cross_input, _cross_screen) = {
-        use crossterm::{Crossterm, RawScreen};
-
-        let cross = Crossterm::new();
-        let input = cross.input();
-        let screen = RawScreen::into_raw_mode().map_err(|_| "Couldn't put screen in raw mode")?;
-        (cross, input, screen)
-    };
+    crossterm::terminal::enable_raw_mode()
+        .expect("couldn't enable raw mode for input");
 
     let mut status = PlayerStatus::new(config);
     let mut command_buffer = String::new();
@@ -708,8 +726,8 @@ fn run_controller(config: Config) -> Result<(), String> {
         println!("[SPC] = play/pause [S] = Stop [H] Previous song [L] = Next song\r");
         println!("[J] = Previous player [K] = Next player [Q] = Quit\r\n");
 
-        cross_input.disable_mouse_mode().unwrap_or(());
-        Either::Left(cross_input.read_async())
+        execute!(stdout(), DisableMouseCapture).expect("couldn't disable mouse capture");
+        Either::Left(())
     };
 
     #[cfg(not(debug_assertions))]
@@ -723,25 +741,68 @@ fn run_controller(config: Config) -> Result<(), String> {
         Either::Right(unix_named_pipe::open_read(PIPE_PATH).map_err(|_| "Unable to open named pipe")?)
     };
 
-    fn get_command<'a>(pipe: &mut Either<AsyncReader, File>, buffer: &'a mut String) -> Result<Option<&'a str>, String> {
+    fn get_command<'a>(pipe: &mut Either<(), File>, buffer: &'a mut String) -> Result<Option<&'a str>, String> {
         buffer.clear();
 
         match pipe {
-            Either::Left(reader) => {
-                use crossterm::{InputEvent::Keyboard, KeyEvent::*};
+            Either::Left(_) => {
+                use crossterm::event::{
+                    Event, KeyCode, KeyEvent, KeyModifiers
+                };
 
-                if let Some(ev) = reader.next() {
-                    if let Keyboard(key) = ev {
-                        match key {
-                            Char(' ') => return Ok(Some(COMMAND_PLAY_PAUSE)),
-                            Char('H') | Char('h') => return Ok(Some(COMMAND_PREV)),
-                            Char('L') | Char('l') => return Ok(Some(COMMAND_NEXT)),
-                            Char('S') | Char('s') => return Ok(Some(COMMAND_STOP)),
-                            Char('J') | Char('j') => return Ok(Some(COMMAND_PREV_PLAYER)),
-                            Char('K') | Char('k') => return Ok(Some(COMMAND_NEXT_PLAYER)),
-                            Char('Q') | Char('q') | Ctrl('c') => return Ok(Some("quit")),
-                            _ => (),
-                        }
+                let has_event = poll(Duration::from_millis(100))
+                    .map_err(|_| "couldn't poll terminal event")?;
+
+                if has_event {
+                    let event = read()
+                        .map_err(|_| "couldn't read event")?;
+
+                    match event {
+                        Event::Key(KeyEvent {
+                            code: KeyCode::Char(' '),
+                            ..
+                        }) => return Ok(Some(COMMAND_PLAY_PAUSE)),
+
+                        Event::Key(KeyEvent {
+                            code: KeyCode::Char(c),
+                            ..
+                        }) if c.to_ascii_lowercase() == 'h' => return Ok(Some(COMMAND_PREV)),
+
+                        Event::Key(KeyEvent {
+                            code: KeyCode::Char(c),
+                            ..
+                        }) if c.to_ascii_lowercase() == 'l' => return Ok(Some(COMMAND_NEXT)),
+
+                        Event::Key(KeyEvent {
+                            code: KeyCode::Char(c),
+                            ..
+                        }) if c.to_ascii_lowercase() == 's' => return Ok(Some(COMMAND_STOP)),
+
+                        Event::Key(KeyEvent {
+                            code: KeyCode::Char(c),
+                            ..
+                        }) if c.to_ascii_lowercase() == 'j' => return Ok(Some(COMMAND_PREV_PLAYER)),
+
+                        Event::Key(KeyEvent {
+                            code: KeyCode::Char(c),
+                            ..
+                        }) if c.to_ascii_lowercase() == 'k' => return Ok(Some(COMMAND_NEXT_PLAYER)),
+
+                        Event::Key(KeyEvent {
+                            code: KeyCode::Char('Q'),
+                            ..
+                        }) |
+                        Event::Key(KeyEvent {
+                            code: KeyCode::Char('q'),
+                            ..
+                        }) |
+                        Event::Key(KeyEvent {
+                            code: KeyCode::Char('c'),
+                            modifiers: KeyModifiers::CONTROL,
+                            ..
+                        }) => return Ok(Some("quit")),
+
+                        _ => (),
                     }
                 }
             }
@@ -772,6 +833,10 @@ fn run_controller(config: Config) -> Result<(), String> {
         status.update();
         thread::sleep(Duration::from_millis(300));
     }
+
+    #[cfg(debug_assertions)]
+    crossterm::terminal::disable_raw_mode()
+        .expect("couldn't disable raw mode");
 
     #[cfg(not(debug_assertions))]
     std::fs::remove_file(PIPE_PATH).unwrap();

@@ -1,12 +1,12 @@
 [package]
 name = "cornetroll"
-version = "0.3.0"
+version = "0.4.0"
 authors = ["Mark Nokalt <marknokalt@live.com>"]
-edition = "2018"
+edition = "2021"
 
 [dependencies]
-clap = "2.33"
-mpris = "1.1"
-signal-hook = "0.1"
+clap = "4.5"
+mpris = "2.0"
+signal-hook = "0.3"
 unix-named-pipe = "0.2"
-crossterm = "0.9"
+crossterm = "0.27"
