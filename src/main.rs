@@ -12,7 +12,7 @@ const PAUSE_ICON: &'static str = "";
 const STOPPED_ICON: &'static str = "";
 const PREV_ICON: &'static str = "";
 const NEXT_ICON: &'static str = "";
-const CLOSED_MSG: &'static str = " no music playing";
+const EMPTY_MSG: &'static str = " no music playing";
 #[cfg(not(debug_assertions))] const EMPTY_CHAR: char = '\u{feff}';
 const PIPE_PATH: &'static str = concat!("/tmp/cornetroll.", env!("USER"));
 
@@ -68,6 +68,7 @@ struct Config {
     meta_format: Vec<MetaFormat>,
     refresh_wait: u8,
     markup_type: MarkupType,
+    empty_msg: String,
 }
 
 #[derive(Copy, Clone, Eq, PartialEq)]
@@ -276,7 +277,7 @@ impl PlayerStatus {
 
             self.print_flush(self.display_buffer.clone().trim_end());
         } else {
-            self.print_flush(CLOSED_MSG)
+            self.print_flush(self.text(&self.config.empty_msg))
         }
     }
 
@@ -494,7 +495,7 @@ impl PlayerStatus {
 
         match markup_type {
             MarkupType::Yuck => if content_string.trim().len() > 0 {
-                format!("(label :text `{}` :show-truncated false :unindent false)", content_string)
+                format!("(label :vexpand true :markup `{}` :show-truncated false :unindent false)", content_string)
             } else {
                 String::new()
             },
@@ -642,6 +643,13 @@ fn parse_cli() -> Result<Either<String, Config>, String> {
              .default_value("polybar")
              .value_parser(PossibleValuesParser::new(["polybar", "yuck", "none"]))
         )
+        .arg(
+            Arg::new("empty-msg")
+            .help("The text to show when no players are available")
+            .short('e')
+            .long("empty-msg")
+            .default_value(EMPTY_MSG)
+        )
     .get_matches();
 
     if let Some(command) = matches.get_one::<String>("command") {
@@ -688,6 +696,10 @@ fn parse_cli() -> Result<Either<String, Config>, String> {
                 .expect("has default-value")
                 .as_str()
                 .into(),
+            empty_msg: matches
+                .get_one::<String>("empty-msg")
+                .expect("has default value")
+                .to_owned()
         }))
     }
 }
