@@ -1,18 +1,37 @@
-use std::{env, thread, time::Duration, path::PathBuf};
-use std::io::{Read, Write, stdout};
-use std::sync::{Arc, atomic::{AtomicBool, Ordering}};
+use std::{
+    env,
+    fs::File,
+    io::{Read, Write, stdout},
+    path::{Path, PathBuf},
+    sync::{
+        atomic::{
+            AtomicBool,
+            Ordering
+        },
+        Arc,
+    },
+    thread,
+    time::Duration,
+};
+use crossterm::{
+    event::{read, poll},
+};
+#[cfg(debug_assertions)] use crossterm::{
+    event::DisableMouseCapture,
+    execute,
+};
 use mpris::{DBusError, Player, PlayerFinder, PlaybackStatus, Metadata};
 use formatting::*;
 
 mod formatting;
 
 const DEBUG_BUILD: bool = cfg!(debug_assertions);
-const PLAY_ICON: &'static str = "";
-const PAUSE_ICON: &'static str = "";
-const STOPPED_ICON: &'static str = "";
-const PREV_ICON: &'static str = "";
-const NEXT_ICON: &'static str = "";
-const EMPTY_MSG: &'static str = " no music playing";
+const PLAY_ICON: &'static str = "\u{f144}";
+const PAUSE_ICON: &'static str = "\u{f28b}";
+const STOPPED_ICON: &'static str = "\u{f28d}";
+const PREV_ICON: &'static str = "\u{f04a}";
+const NEXT_ICON: &'static str = "\u{f04e}";
+const EMPTY_MSG: &'static str = "\u{f057} no music playing";
 #[cfg(not(debug_assertions))] const EMPTY_CHAR: char = '\u{feff}';
 const PIPE_PATH: &'static str = concat!("/tmp/cornetroll.", env!("USER"));
 
@@ -41,13 +60,10 @@ const COMMANDS: &[&'static str] = &[
     COMMAND_PLAY_PAUSE,
 ];
 
-// If Strings and strs are guaranteed to hold a valid UTF-8 character, why the f*** does .len()
-// return the size in bytes?
 macro_rules! str_len {
-    ($s:expr) => { $s.chars().count(); }
+    ($s:expr) => { $s.chars().count() }
 }
 
-// Minimal Either enum
 enum Either<L, R> {
     Left(L),
     Right(R),
@@ -596,7 +612,7 @@ impl<'a> From<&'a str> for MarkupType {
         match name {
             "polybar" => Self::Polybar,
             "yuck" => Self::Yuck,
-            "plain" => Self::Plain,
+            "none" => Self::Plain,
             _ => unreachable!(), // possible values are validated by clap
         }
     }
@@ -710,17 +726,97 @@ fn send_command(command: String) -> Result<(), String> {
     Ok(())
 }
 
-fn run_controller(config: Config) -> Result<(), String> {
-    use std::fs::File;
-    use crossterm::{
-        event::{
-            DisableMouseCapture,
-            read, poll,
-        },
-        execute,
-    };
+fn get_command<'a>(pipe: &mut Either<(), File>, buffer: &'a mut String) -> Result<Option<&'a str>, String> {
+    buffer.clear();
 
+    match pipe {
+        Either::Left(_) => {
+            use crossterm::event::{
+                Event, KeyCode, KeyEvent, KeyModifiers
+            };
+
+            let has_event = poll(Duration::from_millis(100))
+                .map_err(|_| "couldn't poll terminal event")?;
+
+            if has_event {
+                let event = read()
+                    .map_err(|_| "couldn't read event")?;
+
+                match event {
+                    Event::Key(KeyEvent {
+                        code: KeyCode::Char(' '),
+                        ..
+                    }) => return Ok(Some(COMMAND_PLAY_PAUSE)),
+
+                    Event::Key(KeyEvent {
+                        code: KeyCode::Char(c),
+                        ..
+                    }) if c.to_ascii_lowercase() == 'h' => return Ok(Some(COMMAND_PREV)),
+
+                    Event::Key(KeyEvent {
+                        code: KeyCode::Char(c),
+                        ..
+                    }) if c.to_ascii_lowercase() == 'l' => return Ok(Some(COMMAND_NEXT)),
+
+                    Event::Key(KeyEvent {
+                        code: KeyCode::Char(c),
+                        ..
+                    }) if c.to_ascii_lowercase() == 's' => return Ok(Some(COMMAND_STOP)),
+
+                    Event::Key(KeyEvent {
+                        code: KeyCode::Char(c),
+                        ..
+                    }) if c.to_ascii_lowercase() == 'j' => return Ok(Some(COMMAND_PREV_PLAYER)),
+
+                    Event::Key(KeyEvent {
+                        code: KeyCode::Char(c),
+                        ..
+                    }) if c.to_ascii_lowercase() == 'k' => return Ok(Some(COMMAND_NEXT_PLAYER)),
+
+                    Event::Key(KeyEvent {
+                        code: KeyCode::Char('Q'),
+                        ..
+                    }) |
+                    Event::Key(KeyEvent {
+                        code: KeyCode::Char('q'),
+                        ..
+                    }) |
+                    Event::Key(KeyEvent {
+                        code: KeyCode::Char('c'),
+                        modifiers: KeyModifiers::CONTROL,
+                        ..
+                    }) => return Ok(Some("quit")),
+
+                    _ => (),
+                }
+            }
+        }
+
+        Either::Right(pipe) => {
+            pipe.read_to_string(buffer).map_err(|_| "Unable to read named pipe")?;
+            if buffer.len() > 0 && COMMANDS.contains(&buffer.as_str()) {
+                return Ok(Some(buffer.as_str()));
+            }
+        }
+    }
+
+    Ok(None)
+}
+
+fn run_controller(config: Config) -> Result<(), String> {
     let term = Arc::new(AtomicBool::new(false));
+
+    signal_hook::flag::register_conditional_shutdown(
+        signal_hook::consts::SIGINT,
+        2,
+        Arc::clone(&term)
+    ).map_err(|_| "Couldn't hook SIGINT conditional shutdown.")?;
+
+    signal_hook::flag::register(
+        signal_hook::consts::SIGINT,
+        Arc::clone(&term)
+    ).map_err(|_| "Couldn't hook SIGINT.")?;
+
     signal_hook::flag::register(
         signal_hook::consts::SIGTERM,
         Arc::clone(&term)
@@ -728,7 +824,7 @@ fn run_controller(config: Config) -> Result<(), String> {
 
     #[cfg(debug_assertions)]
     crossterm::terminal::enable_raw_mode()
-        .expect("couldn't enable raw mode for input");
+        .map_err(|_| "couldn't enable raw mode for input")?;
 
     let mut status = PlayerStatus::new(config);
     let mut command_buffer = String::new();
@@ -738,97 +834,25 @@ fn run_controller(config: Config) -> Result<(), String> {
         println!("[SPC] = play/pause [S] = Stop [H] Previous song [L] = Next song\r");
         println!("[J] = Previous player [K] = Next player [Q] = Quit\r\n");
 
-        execute!(stdout(), DisableMouseCapture).expect("couldn't disable mouse capture");
+        execute!(stdout(), DisableMouseCapture)
+            .map_err(|_| "couldn't disable mouse capture")?;
+
         Either::Left(())
     };
 
     #[cfg(not(debug_assertions))]
     let mut command_pipe = {
-        match std::fs::remove_file(PIPE_PATH) {
-            Ok(_) => (),
-            Err(_) => (),
+        if Path::new(PIPE_PATH).exists() {
+            return Err(format!(
+                "Socket is already being used by another instance or was left after a crash. \
+                Delete {} if it was the latter.",
+                PIPE_PATH
+            ));
         }
 
         unix_named_pipe::create(PIPE_PATH, Some(0o600)).map_err(|_| "Couldn't create named pipe")?;
         Either::Right(unix_named_pipe::open_read(PIPE_PATH).map_err(|_| "Unable to open named pipe")?)
     };
-
-    fn get_command<'a>(pipe: &mut Either<(), File>, buffer: &'a mut String) -> Result<Option<&'a str>, String> {
-        buffer.clear();
-
-        match pipe {
-            Either::Left(_) => {
-                use crossterm::event::{
-                    Event, KeyCode, KeyEvent, KeyModifiers
-                };
-
-                let has_event = poll(Duration::from_millis(100))
-                    .map_err(|_| "couldn't poll terminal event")?;
-
-                if has_event {
-                    let event = read()
-                        .map_err(|_| "couldn't read event")?;
-
-                    match event {
-                        Event::Key(KeyEvent {
-                            code: KeyCode::Char(' '),
-                            ..
-                        }) => return Ok(Some(COMMAND_PLAY_PAUSE)),
-
-                        Event::Key(KeyEvent {
-                            code: KeyCode::Char(c),
-                            ..
-                        }) if c.to_ascii_lowercase() == 'h' => return Ok(Some(COMMAND_PREV)),
-
-                        Event::Key(KeyEvent {
-                            code: KeyCode::Char(c),
-                            ..
-                        }) if c.to_ascii_lowercase() == 'l' => return Ok(Some(COMMAND_NEXT)),
-
-                        Event::Key(KeyEvent {
-                            code: KeyCode::Char(c),
-                            ..
-                        }) if c.to_ascii_lowercase() == 's' => return Ok(Some(COMMAND_STOP)),
-
-                        Event::Key(KeyEvent {
-                            code: KeyCode::Char(c),
-                            ..
-                        }) if c.to_ascii_lowercase() == 'j' => return Ok(Some(COMMAND_PREV_PLAYER)),
-
-                        Event::Key(KeyEvent {
-                            code: KeyCode::Char(c),
-                            ..
-                        }) if c.to_ascii_lowercase() == 'k' => return Ok(Some(COMMAND_NEXT_PLAYER)),
-
-                        Event::Key(KeyEvent {
-                            code: KeyCode::Char('Q'),
-                            ..
-                        }) |
-                        Event::Key(KeyEvent {
-                            code: KeyCode::Char('q'),
-                            ..
-                        }) |
-                        Event::Key(KeyEvent {
-                            code: KeyCode::Char('c'),
-                            modifiers: KeyModifiers::CONTROL,
-                            ..
-                        }) => return Ok(Some("quit")),
-
-                        _ => (),
-                    }
-                }
-            }
-
-            Either::Right(pipe) => {
-                pipe.read_to_string(buffer).map_err(|_| "Unable to read named pipe")?;
-                if buffer.len() > 0 && COMMANDS.contains(&buffer.as_str()) {
-                    return Ok(Some(buffer.as_str()));
-                }
-            }
-        }
-
-        Ok(None)
-    }
 
     while !term.load(Ordering::Relaxed) {
         if let Some(cmd) = get_command(&mut command_pipe, &mut command_buffer)? {
@@ -848,10 +872,11 @@ fn run_controller(config: Config) -> Result<(), String> {
 
     #[cfg(debug_assertions)]
     crossterm::terminal::disable_raw_mode()
-        .expect("couldn't disable raw mode");
+        .map_err(|_| "couldn't disable raw mode")?;
 
     #[cfg(not(debug_assertions))]
-    std::fs::remove_file(PIPE_PATH).unwrap();
+    std::fs::remove_file(PIPE_PATH)
+        .map_err(|_| "Could've remove named pipe")?;
 
     Ok(())
 }
